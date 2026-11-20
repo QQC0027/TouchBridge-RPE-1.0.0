@@ -1,0 +1,27 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+backend/venv/
+venv/
+.venv/
+.env
+
+# ---- 运行期产生的数据（不进仓库）----
+backend/uploads/
+backend/exports/
+*.log
+
+# ---- .NET / TouchBridge 构建产物（用 build.bat 重新生成）----
+TouchBridge/bin/
+TouchBridge/obj/
+TouchBridge/dist/
+
+# ---- 本项目不需要上传的目录 ----
+.codebuddy/
+backup/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+*.swp
+Thumbs.db
