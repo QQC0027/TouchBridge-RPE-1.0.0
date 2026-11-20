@@ -4,6 +4,8 @@
 
 本工具只支持 Windows。所有处理都在本机完成，不需要账号，也不连接外部服务器。
 
+> **项目来源**：本项目改编自 [MiGuo2787/TouchBridge-RPE](https://github.com/MiGuo2787/TouchBridge-RPE)，是其在 Windows 平台上的改编版本。原项目面向 Mac 触控板，本项目针对 Windows 精确式触控板重新实现了采集器与交互流程。
+
 ## 开始前需要准备什么
 
 | 项目 | 说明 |
@@ -107,7 +109,7 @@ TouchBridge\dist\TouchBridge.exe --diagnose
 `run.bat` 每次启动都会尝试清理旧进程。手动启动时可以用 `netstat -ano | findstr :9000` 找到占用者，再用 `taskkill /f /pid 进程号` 结束它。
 
 **还有 macOS 版本吗？**
-没有了。旧版依赖苹果的私有接口，已经从项目中移除。
+本仓库只提供 Windows 版本。Mac 版本请参考原项目 [MiGuo2787/TouchBridge-RPE](https://github.com/MiGuo2787/TouchBridge-RPE)。
 
 ## 已知限制
 
@@ -131,6 +133,7 @@ TouchBridge\dist\TouchBridge.exe --diagnose
 ## 版权与免责声明
 
 - 请只使用你有合法使用权的音乐制作谱面。
+- 本项目改编自 [MiGuo2787/TouchBridge-RPE](https://github.com/MiGuo2787/TouchBridge-RPE)，在此保留原作者署名；Windows 改编部分遵循本仓库 MIT 许可证。
 - 本工具与 Phigros、Phira、PhiEdit 及其开发方没有隶属或合作关系，相关名称仅用于说明文件格式兼容。
 - 软件按现状提供，没有质量保证。因使用本工具产生的损失或纠纷，作者不承担责任。
 - 项目实现与 AI 参与情况见 [AI_DISCLOSURE.md](AI_DISCLOSURE.md)。
