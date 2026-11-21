@@ -20,6 +20,17 @@ TouchBridge/dist/
 .codebuddy/
 backup/
 
+# ---- Android 构建产物与本机配置 ----
+.buildtools/
+Android/.gradle/
+Android/.kotlin/
+Android/app/build/
+Android/build/
+Android/dist/
+Android/local.properties
+*.apk
+*.aab
+
 # ---- 编辑器 / 系统 ----
 .idea/
 .vscode/
