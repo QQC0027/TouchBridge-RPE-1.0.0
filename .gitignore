@@ -1,4 +1,4 @@
-# ---- Python ----
+﻿# ---- Python ----
 __pycache__/
 *.py[cod]
 backend/venv/
@@ -7,18 +7,35 @@ venv/
 .env
 
 # ---- 运行期产生的数据（不进仓库）----
-backend/uploads/
-backend/exports/
+data/uploads/
+data/exports/
+data/logs/
+data/webview/
+data/.migrated
 *.log
 
-# ---- .NET / TouchBridge 构建产物（用 build.bat 重新生成）----
-TouchBridge/bin/
-TouchBridge/obj/
-TouchBridge/dist/
+# ---- 构建产物（用 build_exe.bat 重新生成）----
+collector/bin/
+collector/obj/
+collector/dist/
+build/
+dist/
+.playwright-cli/
 
 # ---- 本项目不需要上传的目录 ----
 .codebuddy/
 backup/
+
+# ---- Android 构建产物与本机配置 ----
+.buildtools/
+Android/.gradle/
+Android/.kotlin/
+Android/app/build/
+Android/build/
+Android/dist/
+Android/local.properties
+*.apk
+*.aab
 
 # ---- 编辑器 / 系统 ----
 .idea/

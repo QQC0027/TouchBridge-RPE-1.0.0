@@ -8,8 +8,8 @@ import os
 if hasattr(sys.stdout, "encoding") and (sys.stdout.encoding or "").lower() not in ("utf-8", "utf8"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import (BeatClock, quantize, map_x, convert_notes, build_rpe,
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.engine import (BeatClock, quantize, map_x, convert_notes, build_rpe,
                     simulate_session, GestureTracker, TAP, HOLD, FLICK, DRAG, NOTE_TYPE)
 
 

@@ -65,7 +65,7 @@ public sealed class GestureEngine
     private int _lastCount = -1;
     private long _lastTimestampTicks;
 
-    public OscSender Sender { get; }
+    public ITouchSink Sender { get; }
     public bool Sending { get; set; } = true;
     public bool TrackpadOk { get; set; }
     public string DeviceSummary { get; set; } = "未发现精确式触控板";
@@ -75,7 +75,7 @@ public sealed class GestureEngine
 
     public int ActiveCount { get; private set; }
 
-    public GestureEngine(OscSender sender)
+    public GestureEngine(ITouchSink sender)
     {
         Sender = sender;
     }

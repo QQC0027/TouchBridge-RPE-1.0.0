@@ -1,68 +1,78 @@
+using System.Text.Json;
+using System.Windows.Forms;
 using TouchBridge.Core;
 using TouchBridge.Native;
-using TouchBridge.UI;
 
 namespace TouchBridge;
 
+/// <summary>
+/// 触控板采集器（一体化版）。默认以无窗口管道模式运行，由 TouchBridge → RPE 主程序
+/// 自动拉起：stdout 输出 JSON 事件，stdin 接收命令。正常使用不需要单独启动它。
+/// </summary>
 internal static class Program
 {
     [STAThread]
-    private static void Main(string[] args)
+    private static int Main(string[] args)
     {
         // 上次异常退出若遗留触控板手势备份，先恢复，避免系统设置被永久改写
         RecordingGuard.EmergencyRestore();
-
-        if (args.Any(a => a.Equals("--osctest", StringComparison.OrdinalIgnoreCase)))
-        {
-            RunOscTest(args);
-            return;
-        }
+        if (args.Any(a => a.Equals("--restore", StringComparison.OrdinalIgnoreCase))) return 0;
 
         if (args.Any(a => a.Equals("--diagnose", StringComparison.OrdinalIgnoreCase)))
         {
             RunDiagnose();
-            return;
+            return 0;
         }
 
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        Application.ThreadException += (_, e) => ShowFatal(e.Exception);
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => ShowFatal(e.ExceptionObject as Exception);
+        using var pipe = new PipeChannel();
+        pipe.Event("hello", writer =>
+        {
+            writer.WriteNumber("pid", Environment.ProcessId);
+            writer.WriteNumber("protocol", 1);
+            writer.WriteString("version", "1.1");
+        });
 
-        Application.Run(new MainForm());
+        Application.ThreadException += (_, e) => ReportFatal(e.Exception, pipe);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => ReportFatal(e.ExceptionObject as Exception, pipe);
+
+        int exitCode = 0;
+        try
+        {
+            using var host = new CollectorHost(pipe);
+            Application.Run(host);
+        }
+        catch (Exception ex)
+        {
+            ReportFatal(ex, pipe);
+            exitCode = 1;
+        }
+        finally
+        {
+            // 双保险：无论正常退出还是异常，都恢复被临时改写的系统设置
+            RecordingGuard.EmergencyRestore();
+        }
+
+        return exitCode;
     }
 
-    /// <summary>无界面自检：发一轮示例 OSC 报文并打印发送计数，用于验证到后端的链路。</summary>
-    private static void RunOscTest(string[] args)
+    /// <summary>把致命错误写成 JSON 交给主程序（无窗口模式下不能用 MessageBox，会阻塞）。</summary>
+    private static void ReportFatal(Exception? exception, PipeChannel pipe)
     {
-        int port = OscSender.DefaultPort;
-        for (int i = 0; i < args.Length - 1; i++)
+        RecordingGuard.EmergencyRestore();
+        string message = exception?.Message ?? "未知错误";
+        pipe.Event("error", writer =>
         {
-            if (args[i] is "--port" or "-p" && int.TryParse(args[i + 1], out int parsed) && parsed > 0 && parsed <= 65535)
-            {
-                port = parsed;
-            }
-        }
-
-        using var sender = new OscSender(port);
-        if (!sender.Ready)
-        {
-            WriteLines($"failed to open UDP socket for 127.0.0.1:{port}");
-            return;
-        }
-
-        int sent = sender.SendSample();
-        // 控制台只用 ASCII，避免不同代码页下的乱码
-        WriteLines(
-            $"target: 127.0.0.1:{port}",
-            $"sent: {sent}",
-            $"failed: {sender.FailedCount}",
-            "hint: open the web UI and check the OSC monitor card.");
+            writer.WriteString("message", message);
+            writer.WriteBoolean("fatal", true);
+            writer.WriteString("detail", exception?.ToString() ?? string.Empty);
+        });
     }
 
-    /// <summary>诊断模式：监听 1.5 秒，打印设备描述符摘要与前若干帧的触点。</summary>
+    /// <summary>诊断模式：监听 3 秒，把设备描述符摘要与前若干帧写入临时文件。</summary>
     private static void RunDiagnose()
     {
         var sb = new System.Text.StringBuilder();
@@ -76,9 +86,9 @@ internal static class Program
             frames++;
             if (frames > 8) return;
             sb.Append($"frame{frames} count={frame.Count} ");
-            foreach (TouchBridge.Core.TouchContact c in frame.Contacts)
+            foreach (TouchContact contact in frame.Contacts)
             {
-                sb.Append($"[id={c.ContactId} x={c.X:0.00} y={c.Y:0.00} tip={(c.Tip ? 1 : 0)}] ");
+                sb.Append($"[id={contact.ContactId} x={contact.X:0.00} y={contact.Y:0.00} tip={(contact.Tip ? 1 : 0)}] ");
             }
             sb.AppendLine();
         };
@@ -96,11 +106,11 @@ internal static class Program
         sb.AppendLine($"diag={source.Diagnostics}");
         if (source.LastError is not null) sb.AppendLine($"lastError={source.LastError}");
 
-        // 控制台代码页可能不是 UTF-8，另存一份到临时目录便于核对中文设备名
         try
         {
             string path = Path.Combine(Path.GetTempPath(), "touchbridge-diagnose.txt");
             File.WriteAllText(path, sb.ToString(), System.Text.Encoding.UTF8);
+            WriteLines($"diagnose written to {path}");
         }
         catch (IOException)
         {
@@ -108,7 +118,6 @@ internal static class Program
         catch (UnauthorizedAccessException)
         {
         }
-        WriteLines(sb.ToString().Split('\n'));
     }
 
     /// <summary>
@@ -119,7 +128,6 @@ internal static class Program
     {
         NativeMethods.AttachConsole(0xFFFFFFFF);
 
-        // 输出被重定向（> file / 管道）时走标准输出；否则直接写控制台
         try
         {
             foreach (string line in lines) Console.Out.WriteLine(line);
@@ -137,22 +145,9 @@ internal static class Program
         }
         catch (IOException)
         {
-            // 没有控制台可写，忽略
         }
         catch (UnauthorizedAccessException)
         {
-            // 同上
         }
-    }
-
-    private static void ShowFatal(Exception? ex)
-    {
-        RecordingGuard.EmergencyRestore();
-        string message = ex?.Message ?? "未知错误";
-        MessageBox.Show(
-            $"采集器遇到未处理的错误：\n\n{message}\n\n如果反复出现，请把上面的信息反馈给维护者。",
-            "触控板 → RPE",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Error);
     }
 }

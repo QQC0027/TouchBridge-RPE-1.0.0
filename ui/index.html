@@ -4,7 +4,6 @@
 <meta charset="UTF-8" data-page-node-id="dOGvDMpHLaFTEXNHWrEyMs" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="dX8XxN8eVIwSTZfJBTSCkF" />
 <title>TouchBridge → RPE 制谱采集器</title>
-<script src="/vendor/socket.io.min.js"></script>
 <style>
   :root{
     --bg:#0e1320; --panel:#161d2e; --line:#27304a; --text:#e8eef7; --muted:#8b97ad;
@@ -54,6 +53,20 @@
   .legend{display:flex;gap:14px;font-size:12px;margin-top:8px;flex-wrap:wrap;}
   .legend span{display:inline-flex;align-items:center;gap:5px;}
   .bar{width:14px;height:10px;border-radius:3px;display:inline-block;}
+
+  #autochartCard details,.ac-capture{border:1px solid var(--line);border-radius:8px;padding:8px;margin-top:10px;}
+  #autochartCard summary{cursor:pointer;color:#cdd8ee;}
+  .ac-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px;}
+  .ac-check{display:flex;align-items:center;gap:6px;}
+  .ac-check input{width:auto;accent-color:var(--blue);}
+  .ac-progress{margin-top:10px;display:grid;gap:4px;color:var(--muted);}
+  .ac-progress progress{width:100%;height:8px;accent-color:var(--blue);}
+  .ac-results{display:grid;gap:5px;margin-top:8px;overflow-wrap:anywhere;}
+  #acLogs{max-height:130px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#0a0f1a;color:#7fe3c4;padding:8px;border-radius:8px;font-size:11px;margin-bottom:0;}
+  .ac-capture-actions{display:flex;align-items:end;flex-wrap:wrap;gap:8px;}
+  .ac-capture-actions label{width:105px;margin-bottom:0;}
+  .ac-capture-actions input{margin-top:3px;}
+  @media(max-width:760px){.wrap{flex-direction:column;}.left,.right{width:100%;flex-basis:auto;}.ac-capture-actions label{flex:1;min-width:105px;}}
 </style>
 </head>
 <body data-page-node-id="2A9hFzaN3SSG9J32gy9XyR">
@@ -144,12 +157,45 @@
       <div class="small" data-page-node-id="9jD3Q0ixghopjdW4ARh1JA">短促快划→<b style="color:var(--red)" data-page-node-id="tyKhopzycGtDSxpW0CvH7K">红键Flick</b>；慢速长移→<b style="color:var(--amber)" data-page-node-id="wHLqEYfeBHQ1zbuuhfVw3E">黄键Drag</b>；几乎不动→Tap/Hold。距离小于"死区"直接当 Tap（去抖）。<br data-page-node-id="aB1cD2eF3gH4iJ5kL6mN7">「拖拽最小速度 / 最长时长」用于把"长按时手指轻微漂移"自动归为 Hold，避免生成乱糟糟的长拖尾。</div>
     </div>
 
+    <section class="card" id="autochartCard" hidden>
+      <h2>自动制谱</h2>
+      <div class="small">使用上方已导入的音频、曲绘和录制卡片中的谱面信息，生成独立的 PEZ，不覆盖录制。</div>
+      <div class="ac-grid">
+        <div><label for="acDifficulty">难度</label><select id="acDifficulty"><option value="easy">EASY</option><option value="normal">NORMAL</option><option value="hard" selected>HARD</option><option value="expert">EXPERT</option><option value="master">MASTER</option></select></div>
+        <div><label for="acKey">轨道数</label><select id="acKey"><option value="auto" selected>自动</option><option value="2k">2K</option><option value="4k">4K</option><option value="6k">6K</option></select></div>
+      </div>
+      <label class="ac-check"><input id="acAllTiers" type="checkbox"> 同时生成全部 5 档并打包 ZIP</label>
+      <details><summary>生成选项</summary>
+        <div class="ac-grid">
+          <div><label for="acDensity">写谱密度</label><input id="acDensity" type="number" min="0.7" max="1.6" step="0.05" value="1.0"></div>
+          <div><label for="acLineFx">判定线动效</label><select id="acLineFx"><option value="none">无</option><option value="alpha_pulse">脉冲呼吸</option><option value="pinwheel">风车旋转</option><option value="grid">网格</option><option value="curve">曲线轨迹</option><option value="color_flow">变色流</option><option value="glow">光晕呼吸</option><option value="bounce">弹跳</option><option value="breathe">呼吸缩放</option><option value="meteor">流星</option><option value="echo_trail">回音残影</option><option value="spotlight">聚光</option><option value="mix">组合</option></select></div>
+          <div><label for="acPulse">Pulse 形态</label><select id="acPulse"><option value="chain" selected>链式</option><option value="sweep">横扫</option></select></div>
+          <div><label for="acDeco">装饰段落</label><select id="acDeco"><option value="intro_chorus" selected>前奏 + 副歌</option><option value="intro">前奏</option><option value="chorus">副歌</option><option value="verse">主歌</option><option value="repeat">循环</option><option value="all">全部</option></select></div>
+          <div><label for="acMainY">判定线初始 Y</label><input id="acMainY" type="number" value="-300" step="25"></div>
+          <div><label for="acMix">组合特效顺序</label><input id="acMix" value="grid@all; sweep@all; pinwheel@climax"></div>
+        </div>
+        <label class="ac-check"><input id="acSwing" type="checkbox"> 主判定线左右摆动</label>
+        <label class="ac-check"><input id="acCustomWeights" type="checkbox"> 自定义音符类型权重</label>
+        <div class="ac-grid"><div><label for="acTap">Tap 权重</label><input id="acTap" type="number" min="0" max="1" step="0.05" value="1.0" disabled></div><div><label for="acHold">Hold 权重</label><input id="acHold" type="number" min="0" max="1" step="0.05" value="0.30" disabled></div><div><label for="acFlick">Flick 权重</label><input id="acFlick" type="number" min="0" max="1" step="0.05" value="0.60" disabled></div><div><label for="acDrag">Drag 权重</label><input id="acDrag" type="number" min="0" max="1" step="0.05" value="0.0" disabled></div></div>
+        <label for="acSeed">随机种子</label><input id="acSeed" type="number" value="42" step="1">
+      </details>
+      <label for="acPointsFile">导入踩音 points JSON（可选）</label>
+      <input id="acPointsFile" type="file" accept="application/json,.json">
+      <div class="btns"><button class="sec" id="acClearPoints" type="button" disabled>清除导入的 points</button></div>
+      <div class="small" id="acPointsInfo">未导入 points 时，使用已导入的音频检测踩音。</div>
+      <div class="btns"><button id="acStart" type="button" disabled>开始生成</button><button class="red" id="acCancel" type="button" disabled>取消任务</button></div>
+      <div class="ac-progress"><progress id="acProgress" max="100" value="0" aria-label="任务进度"></progress><span id="acStatus" role="status">就绪</span></div>
+      <div id="acResults" class="ac-results"></div><pre id="acLogs" aria-live="polite">等待生成任务…</pre>
+    </section>
+
     <div class="card" data-page-node-id="biP3RuFyg3AHAEzO6m3cUS">
-      <h2 data-page-node-id="WXM5H3U0N7k4JCdzY9ZtfF">④ OSC 监听（TouchBridge）</h2>
-      <div class="row" data-page-node-id="DTApyohsUq3bO4rChbotWC"><div data-page-node-id="NaLa0G6ByB7xENYafOiQ8G"><label data-page-node-id="AiAxTu8vfyZqoyuMtO1U9w">端口</label><input id="oscPort" type="number" value="9000" data-page-node-id="xPMdBnfbSBEbO1mUzPx0pN" /></div></div>
+      <h2 data-page-node-id="WXM5H3U0N7k4JCdzY9ZtfF">④ 采集连接状态（TouchBridge）</h2>
+      <div class="small" id="collectorSummary" role="status">正在连接触控板…</div>
+      <div class="small" id="collectorDiagnostics"></div>
       <div class="btns" data-page-node-id="PhuO0Qg2wtWAdVNqnC15cV">
-        <button class="amber" id="monBtn" data-page-node-id="fS9GhRQM73PYiD9qnyrpW7">开始监听 OSC</button>
-        <button class="sec" id="selftestBtn" data-page-node-id="6lOyONhDtv6lGDJ0kR22Ef">测试 OSC 自检</button>
+        <button class="amber" id="monBtn" data-page-node-id="fS9GhRQM73PYiD9qnyrpW7">暂停采集</button>
+        <button class="sec" id="reconnectBtn">重新连接采集器</button>
+        <button class="sec" id="selftestBtn" data-page-node-id="6lOyONhDtv6lGDJ0kR22Ef">采集链路自检</button>
         <button class="sec" id="simBtn" data-page-node-id="RlFEzmaao9UUKHyUndQyHE">注入模拟手势</button>
       </div>
       <div class="proto" data-page-node-id="jgcUSZ6XdUpks42l9LRKXm">已按 TouchBridge 真实协议自动解析：<br data-page-node-id="jcvCQq53zf7vwOhEvODdoL">
@@ -164,8 +210,8 @@
     <div class="card" data-page-node-id="5bu6rEnnsUXqmRFTELIX1C">
       <h2 data-page-node-id="1W83CfrW8EDKtl9kK4VCcc">⑤ 录制与导出</h2>
       <div class="lights" style="margin-bottom:8px;" data-page-node-id="xSmVnn4m7YtKZjv4Fj6Xrj">
-        <span class="light" data-page-node-id="yTUhNrk6bui1FYMS5F8dDo"><i class="dotled" id="ledSock" data-page-node-id="wD9cQTCtBFRrD8ORpoDBw1"></i>服务连接</span>
-        <span class="light" data-page-node-id="krUWl9JZwqbhJ0Lzs5Wsfn"><i class="dotled" id="ledOsc" data-page-node-id="ECqh3mQ3fFSzv7sDQG9R00"></i>OSC 监听</span>
+        <span class="light" data-page-node-id="yTUhNrk6bui1FYMS5F8dDo"><i class="dotled" id="ledSock" data-page-node-id="wD9cQTCtBFRrD8ORpoDBw1"></i>应用连接</span>
+        <span class="light" data-page-node-id="krUWl9JZwqbhJ0Lzs5Wsfn"><i class="dotled" id="ledOsc" data-page-node-id="ECqh3mQ3fFSzv7sDQG9R00"></i>触控板采集</span>
         <span class="light" data-page-node-id="5ZKBP0m7raUBJxgHHhj2jS"><i class="dotled" id="ledAudio" data-page-node-id="n1NGXZcVatDFl8hyGFFPns"></i>音频已加载</span>
       </div>
       <div class="btns" data-page-node-id="6hSgZB51mEiiTGjTB8ZFWB">
@@ -182,6 +228,15 @@
       <div class="row" style="margin-top:8px;" data-page-node-id="metaRow2">
         <div data-page-node-id="cp1"><label data-page-node-id="cp2">作曲者</label><input id="composer" value="" data-page-node-id="cp3" /></div>
         <div data-page-node-id="cp4"><label data-page-node-id="cp5">谱面设计</label><input id="charter" value="" data-page-node-id="cp6" /></div>
+      </div>
+      <div class="ac-capture" id="acCapture" hidden>
+        <strong>录制音符校正</strong>
+        <div class="ac-capture-actions">
+          <label for="acWindow">时间窗 (ms)<input id="acWindow" type="number" min="0" max="1000" value="120" step="1"></label>
+          <label for="acStrength">吸附强度<input id="acStrength" type="number" min="0" max="1" value="1" step="0.05"></label>
+          <button class="sec" id="acSnap" type="button">吸附到踩音点</button><button class="sec" id="acUndo" type="button" disabled>撤销吸附</button>
+        </div>
+        <div class="small" id="acSnapState" role="status">停止录制后，可将音符吸附到附近的音频踩音点。</div>
       </div>
       <div class="stat" style="margin-top:10px;" data-page-node-id="rQlsp9OaV28DygKqDkcko1">
         <span data-page-node-id="qynXNhuONnSZOHWGE6ppKa">音符数：<b id="evCount" data-page-node-id="Cfa4kKHcYUeay7UV7abMzS">0</b></span>
@@ -223,41 +278,128 @@
 <div class="toast" id="toast" data-page-node-id="IBaiJyLO6Og3u9yyl1wUD1"></div>
 
 <script>
-const socket = io();
+const bridge = (()=>{
+  const handlers = new Map();
+  let connected = false;
+  function dispatch(name, payload){
+    for(const handler of handlers.get(name)||[]){
+      try { handler(payload); } catch(error){ console.error(name, error); }
+    }
+  }
+  async function emit(name, payload={}, callback){
+    if(typeof payload==='function'){ callback=payload; payload={}; }
+    let result;
+    try {
+      if(!connected) throw new Error('应用界面尚未连接，请稍候');
+      result=await window.pywebview.api.call(name, payload);
+      if(result.state) dispatch('state', result.state);
+      if(result.preview) dispatch('preview', result.preview);
+      if(!result.ok && name!=='poll_events') toast(result.error||'操作失败', 'error');
+    } catch(error){
+      result={ok:false, error:String(error.message||error)};
+      if(name!=='poll_events') toast(result.error, 'error');
+    }
+    if(callback) callback(result);
+    return result;
+  }
+  async function poll(){
+    if(!connected) return;
+    try {
+      const result=await window.pywebview.api.call('poll_events', {});
+      for(const item of result.events||[]) dispatch(item.event, item.payload);
+    } catch(error){ console.error(error); }
+    setTimeout(poll, 40);
+  }
+  function ready(){
+    if(connected) return;
+    connected=true;
+    dispatch('connect', {});
+    poll();
+  }
+  window.addEventListener('pywebviewready', ready);
+  window.addEventListener('beforeunload', ()=>{ connected=false; });
+  return {emit, get connected(){ return connected; }, on(name, handler){
+    if(!handlers.has(name)) handlers.set(name, []);
+    handlers.get(name).push(handler);
+  }};
+})();
 let preview = {notes:[], playhead:0, audioTime:0, bpm:120, beats_per_bar:4, segments:[], offset_ms:0};
 let monitoring = false;
 
 // 浏览器端音频（声音从这里放出，使用页面上的原生播放器，最稳）
 const audio = document.getElementById('audioEl');
-audio.preload = "auto";
+audio.preload = 'auto';
+let loadedAudioName=null, loadedCoverName=null, audioBlobUrl=null, coverBlobUrl=null;
+function blobUrl(result){
+  const bytes=Uint8Array.from(atob(result.data), char=>char.charCodeAt(0));
+  return URL.createObjectURL(new Blob([bytes], {type:result.mime}));
+}
+async function loadAudio(state){
+  loadedAudioName=state.audio_filename;
+  audio.pause();
+  if(audioBlobUrl){ URL.revokeObjectURL(audioBlobUrl); audioBlobUrl=null; }
+  if(state.audio_uri){ audio.src=state.audio_uri; audio.load(); }
+  else await audioFallback();
+  document.getElementById('audioInfo').textContent='已加载：'+state.audio_filename;
+}
+async function audioFallback(){
+  const name=loadedAudioName;
+  const result=await bridge.emit('audio_blob');
+  if(!result.ok || name!==loadedAudioName) return;
+  audioBlobUrl=blobUrl(result);
+  audio.src=audioBlobUrl;
+  audio.load();
+}
+async function loadCover(state){
+  loadedCoverName=state.cover_filename;
+  const img=document.getElementById('coverPreview');
+  if(coverBlobUrl){ URL.revokeObjectURL(coverBlobUrl); coverBlobUrl=null; }
+  img.src=state.cover_uri;
+  img.style.display='block';
+}
+document.getElementById('coverPreview').onerror=async ()=>{
+  const name=loadedCoverName;
+  if(!name || coverBlobUrl) return;
+  const result=await bridge.emit('cover_blob');
+  if(result.ok && name===loadedCoverName){
+    coverBlobUrl=blobUrl(result);
+    document.getElementById('coverPreview').src=coverBlobUrl;
+  }
+};
 function pushAudioTime(){
-  socket.emit('audio_time', {t: audio.currentTime||0, playing: !audio.paused && !audio.ended});
+  bridge.emit('audio_time', {t: audio.currentTime||0, playing: !audio.paused && !audio.ended});
 }
 audio.addEventListener('play',  pushAudioTime);
 audio.addEventListener('pause', pushAudioTime);
 audio.addEventListener('seeked', pushAudioTime);
 audio.addEventListener('ended', pushAudioTime);
 audio.addEventListener('error', ()=>{
-  const c = audio.error && audio.error.code;
-  toast('音频加载失败(code '+c+')：文件格式可能不支持，或上传失败', 'error');
+  if(!audioBlobUrl && loadedAudioName){ audioFallback(); return; }
+  toast('音频无法解码，请转换为 WAV、MP3 或 OGG 后重试', 'error');
 });
-setInterval(()=>{ if(!audio.paused && !audio.ended) pushAudioTime(); }, 80);
+setInterval(()=>{ if(bridge.connected && !audio.paused && !audio.ended) pushAudioTime(); }, 250);
 
 function toast(msg, level){
   const t=document.getElementById('toast');
   t.textContent=msg; t.className='toast show '+(level||'');
   setTimeout(()=>t.className='toast', 3000);
 }
-socket.on('toast', d=>toast(d.msg, d.level));
-socket.on('calibrated', d=>{ setVal('hit_offset', d.hit_offset_ms); saveSettings(); });
+bridge.on('toast', d=>toast(d.msg, d.level));
+bridge.on('calibrated', d=>{ setVal('hit_offset', d.hit_offset_ms); saveSettings(); });
 
-socket.on('state', d=>{
+bridge.on('state', d=>{
   document.getElementById('evCount').textContent=d.note_count;
   document.getElementById('recState').textContent=d.recording?'是':'否';
   document.getElementById('clk').textContent=(d.audio_time||0).toFixed(2)+'s';
   // 状态灯
   setLed('ledSock', true);
-  setLed('ledOsc', d.monitor_status==='listening', d.monitor_status==='failed');
+  const collector=d.collector||{};
+  monitoring=collector.running && !collector.paused;
+  isRecording=!!d.recording;
+  setLed('ledOsc', monitoring && collector.devices>0, !!collector.error);
+  document.getElementById('collectorSummary').textContent=collector.summary||'采集器未连接';
+  document.getElementById('collectorDiagnostics').textContent=collector.error||collector.warning||collector.diagnostics||'';
+  document.getElementById('monBtn').textContent=monitoring?'暂停采集':'恢复采集';
   setLed('ledAudio', d.audio_loaded);
   if(d.settings){
     setVal('bpm',d.settings.bpm); setVal('offset',d.settings.offset_ms);
@@ -273,37 +415,39 @@ socket.on('state', d=>{
     setVal('dragMinSpeed',d.settings.dragMinSpeed); document.getElementById('dmsVal').textContent=(+d.settings.dragMinSpeed||0.25).toFixed(2);
     setVal('dragMaxDur',d.settings.dragMaxDur); document.getElementById('dmdVal').textContent=(+d.settings.dragMaxDur||1.5).toFixed(1);
     setVal('hit_offset', d.settings.hit_offset_ms||0);
-    setVal('oscPort', d.osc_port);
   }
   if(d.meta && d.meta.name!=null) setVal('chartName', d.meta.name);
   if(d.meta){ if(d.meta.composer!=null) setVal('composer', d.meta.composer); if(d.meta.charter!=null) setVal('charter', d.meta.charter); }
-  if(d.cover_filename){
-    const img=document.getElementById('coverPreview');
-    img.src='/audio/'+encodeURIComponent(d.cover_filename)+'?t='+Date.now();
-    img.style.display='block';
-  }
+  if(d.audio_loaded && d.audio_filename && loadedAudioName!==d.audio_filename) loadAudio(d);
+  const img=document.getElementById('coverPreview');
+  if(d.cover_loaded && d.cover_filename){
+    if(loadedCoverName!==d.cover_filename) loadCover(d);
+  } else { img.style.display='none'; img.removeAttribute('src'); loadedCoverName=null; }
 });
 function setLed(id, on, bad){
   const e=document.getElementById(id);
   e.className='dotled'+(on?(bad?' bad':' on'):'');
 }
-socket.on('preview', d=>{ preview=d; });
-socket.on('osc_raw', d=>{
+bridge.on('preview', d=>{ preview=d; });
+bridge.on('raw_batch', items=>{
   const m=document.getElementById('monitor');
-  m.textContent += `[${d.address}]  ` + JSON.stringify(d.args) + '\n';
+  const lines=items.map(d=>`[${d.address}]  ${JSON.stringify(d.args)}`);
+  m.textContent=(m.textContent+'\n'+lines.join('\n')).split('\n').slice(-200).join('\n');
   m.scrollTop=m.scrollHeight;
 });
-socket.on('exported', d=>{
-  let html='';
-  if(d.pez){
-    html+=`已导出通用谱包：<a class="dl" href="/download/${encodeURIComponent(d.pez)}">${d.pez}</a>`;
-    html+=`<br><b style="color:var(--amber)">这个 .pez 平台通用：iPad Phira 与 Windows RPE/PhiEdit 都直接导入这一个文件即可（音乐+曲绘+谱面全在里面），无需再传任何单独文件。</b>`;
-  } else {
-    html+=`导出失败，请重试`;
-  }
-  html+=` （${JSON.stringify(d.stats)}）`;
-  document.getElementById('dl').innerHTML=html;
-  toast('导出成功：'+(d.pez||''),'success');
+bridge.on('frame', frame=>{
+  document.getElementById('collectorSummary').textContent=`${frame.devices} 台设备 · ${frame.count} 个触点`;
+});
+bridge.on('exported', d=>{
+  const output=document.getElementById('dl');
+  output.replaceChildren();
+  const text=document.createElement('span');
+  text.textContent=`已导出：${d.pez}（${JSON.stringify(d.stats)}）`;
+  const save=document.createElement('button');
+  save.className='sec'; save.textContent='另存为…';
+  save.onclick=()=>bridge.emit('save_export', {filename:d.pez});
+  output.append(text, save);
+  toast('导出成功：'+d.pez, 'success');
 });
 
 function setVal(id,v){ const e=document.getElementById(id); if(e) e.value=v; }
@@ -329,7 +473,7 @@ function getSettings(){
 }
 function saveSettings(){
   const meta = { name: document.getElementById('chartName').value, level: document.getElementById('chartLevel').value, composer: document.getElementById('composer').value, charter: document.getElementById('charter').value };
-  socket.emit('save_settings', {settings:getSettings(), meta:meta});
+  bridge.emit('save_settings', {settings:getSettings(), meta:meta});
 }
 ['bpm','offset','bpb','subdiv','debounce','xmode','chartName','chartLevel','deadZone','holdMinTime','flickWindow','flickMaxDist','flick','dragSample','dragMinSpeed','dragMaxDur','hit_offset'].forEach(id=>{
   document.getElementById(id).addEventListener('change', saveSettings);
@@ -351,41 +495,17 @@ function saveSettings(){
 });
 
 // 音频上传 + 浏览器播放（选文件即自动导入）
-function uploadAudio(){
-  const f=document.getElementById('audioFile').files[0];
-  if(!f){toast('请先选择音频文件','error');return;}
-  const fd=new FormData(); fd.append('file',f);
-  fetch('/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-    if(d.ok){
-      audio.src='/audio/'+encodeURIComponent(d.filename);
-      audio.load();
-      socket.emit('audio_loaded',{filename:d.filename});
-      document.getElementById('audioInfo').textContent='已加载：'+d.filename+' — 点播放即可出声';
-      toast('音频已导入: '+d.filename,'success');
-    } else toast('上传失败: '+(d.msg||''),'error');
-  }).catch(()=>toast('上传失败，后端可能未运行','error'));
+async function uploadAudio(){
+  const result=await bridge.emit('pick_audio');
+  if(result.ok && !result.cancelled) document.getElementById('audioInfo').textContent='已加载：'+result.filename;
 }
 document.getElementById('uploadBtn').onclick=uploadAudio;
-document.getElementById('audioFile').addEventListener('change', uploadAudio);
+document.getElementById('audioFile').hidden=true;
 
-// 曲绘上传（选文件即自动导入）
-function uploadCover(){
-  const f=document.getElementById('coverFile').files[0];
-  if(!f){toast('请先选择图片文件','error');return;}
-  const fd=new FormData(); fd.append('file',f);
-  fetch('/upload_cover',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
-    if(d.ok){
-      const img=document.getElementById('coverPreview');
-      img.src='/audio/'+encodeURIComponent(d.filename)+'?t='+Date.now();
-      img.style.display='block';
-      toast('曲绘已导入: '+d.filename,'success');
-    } else toast('上传失败: '+(d.msg||''),'error');
-  }).catch(()=>toast('上传失败，后端可能未运行','error'));
-}
-document.getElementById('coverBtn').onclick=uploadCover;
-document.getElementById('coverFile').addEventListener('change', uploadCover);
+document.getElementById('coverBtn').onclick=()=>bridge.emit('pick_cover');
+document.getElementById('coverFile').hidden=true;
 document.getElementById('coverClearBtn').onclick=()=>{
-  socket.emit('cover_clear');
+  bridge.emit('cover_clear');
   const img=document.getElementById('coverPreview');
   img.style.display='none'; img.src='';
   toast('已清除曲绘','info');
@@ -398,45 +518,31 @@ document.getElementById('playBtn').onclick=()=>{
 document.getElementById('pauseBtn').onclick=()=>audio.pause();
 document.getElementById('stopBtn').onclick=()=>{ audio.pause(); audio.currentTime=0; pushAudioTime(); };
 
-// OSC
-document.getElementById('oscPort').addEventListener('change', ()=>{
-  socket.emit('save_settings',{settings:{osc_port:+document.getElementById('oscPort').value}, meta:{}});
-});
-document.getElementById('monBtn').onclick=()=>{
-  if(!monitoring){ socket.emit('monitor_start'); monitoring=true;
-    document.getElementById('monBtn').textContent='停止监听 OSC';
-    document.getElementById('monitor').textContent=''; }
-  else { socket.emit('monitor_stop'); monitoring=false;
-    document.getElementById('monBtn').textContent='开始监听 OSC'; }
-};
-document.getElementById('selftestBtn').onclick=()=>socket.emit('osc_selftest');
-document.getElementById('simBtn').onclick=()=>socket.emit('sim_inject');
-document.getElementById('calibBtn').onclick=()=>socket.emit('auto_calibrate');
+document.getElementById('monBtn').onclick=()=>bridge.emit(monitoring?'collector_pause':'collector_resume');
+document.getElementById('reconnectBtn').onclick=()=>bridge.emit('collector_reconnect');
+document.getElementById('selftestBtn').onclick=()=>bridge.emit('collector_selftest');
+document.getElementById('simBtn').onclick=()=>bridge.emit('sim_inject');
+document.getElementById('calibBtn').onclick=()=>bridge.emit('auto_calibrate');
 
 // 录制（与音频联动）
 let isRecording=false;
 function startRec(){
   if(audio.src){ audio.currentTime=0; audio.play().catch(()=>{}); }
   else toast('未导入音频：将以内部时钟录制（仅供测试）','info');
-  socket.emit('record_start');
+  bridge.emit('record_start');
   isRecording=true;
   toast('录制中：跟着音乐打板；ESC 解除鼠标锁定，Alt+Enter 重新锁定；点「停止录制」结束','info');
 }
 function stopRec(){
   if(!isRecording) return;
   isRecording=false;
-  audio.pause(); socket.emit('record_stop');
+  audio.pause(); bridge.emit('record_stop');
 }
 document.getElementById('recBtn').onclick=startRec;
 document.getElementById('stopRecBtn').onclick=stopRec;
-document.getElementById('clearBtn').onclick=()=>socket.emit('clear_events');
-document.getElementById('exportBtn').onclick=()=>socket.emit('export_rpe');
-document.getElementById('openBtn').onclick=()=>{
-  fetch('/open_exports').then(r=>r.json()).then(d=>{
-    if(!d.ok) toast('无法打开文件夹：'+(d.msg||''),'error');
-    else toast('已打开导出文件夹','success');
-  }).catch(()=>toast('打开文件夹失败，后端可能未运行','error'));
-};
+document.getElementById('clearBtn').onclick=()=>bridge.emit('clear_events');
+document.getElementById('exportBtn').onclick=()=>bridge.emit('export_rpe');
+document.getElementById('openBtn').onclick=()=>bridge.emit('open_exports');
 
 // ---- 类 Phigros 竖向滚动预览 ----
 const cv=document.getElementById('cv'); const ctx=cv.getContext('2d');
@@ -556,7 +662,7 @@ function draw(){
 
   // 更紧的音频时钟同步：播放时每 3 帧上报一次，缩小录制时刻的时钟误差
   if(!audio.paused && !audio.ended && ((++_frame)%3===0)){
-    socket.emit('audio_time', {t:audio.currentTime, playing:true});
+    bridge.emit('audio_time', {t:audio.currentTime, playing:true});
   }
 
   requestAnimationFrame(draw);
@@ -578,8 +684,204 @@ cv.addEventListener('click', e=>{
   const sec=(preview.offset_ms||0)/1000 + targetBeat/(bpm/60);
   if(sec>=0 && audio.duration && sec<audio.duration){ audio.currentTime=sec; }
 });
-setInterval(()=>socket.emit('get_preview'), 80);
-socket.emit('get_state');
+setInterval(()=>{ if(bridge.connected) bridge.emit('get_preview'); }, 80);
+</script>
+<script>
+(() => {
+  const el = id => document.getElementById(id);
+  const weights = {tap_weight: 'acTap', hold_weight: 'acHold', flick_weight: 'acFlick', drag_weight: 'acDrag'};
+  const terminal = new Set(['done', 'cancelled', 'error']);
+  const pointsHint = '未导入 points 时，使用已导入的音频检测踩音。';
+  let state = {}, points, reading = false, pending = false, cancelling = false, polling = false, job = null, early = null;
+
+  function refresh() {
+    const enabled = state.autochart_enabled === true;
+    el('autochartCard').hidden = el('acCapture').hidden = !enabled;
+    const busy = pending || !!job;
+    const noAudio = !enabled || !bridge.connected || busy || !state.audio_loaded;
+    const hasFile = !!points;
+    el('acStart').disabled = noAudio || reading || (hasFile && !points);
+    el('acSnap').disabled = noAudio || state.recording || !state.note_count;
+    el('acUndo').disabled = !enabled || !bridge.connected || busy || state.recording || !state.autochart_can_undo;
+    el('acCancel').disabled = !bridge.connected || !job || cancelling;
+    el('acDifficulty').disabled = el('acAllTiers').checked;
+    el('acClearPoints').disabled = !hasFile;
+    Object.values(weights).forEach(id => el(id).disabled = !el('acCustomWeights').checked);
+  }
+
+  async function request(event, data) {
+    const response=await bridge.emit(event, data);
+    if(!response.ok) throw new Error(response.error||'请求失败');
+    return response;
+  }
+
+  function addDownload(label, filename, jobId) {
+    if(!filename) return;
+    const link=document.createElement('button');
+    link.className='sec';
+    link.textContent=label;
+    link.onclick=()=>bridge.emit('save_artifact', {job_id:jobId, filename});
+    el('acResults').append(link);
+  }
+
+  function progress(info) {
+    if (!job) {
+      if (pending && info?.job_id) early = info;
+      return;
+    }
+    if (info?.job_id !== job.id) return;
+    const stage = info.error || info.message || info.stage || '正在处理…';
+    el('acProgress').value = Number(info.percent) || 0;
+    el('acStatus').textContent = stage;
+    if (job.snap) el('acSnapState').textContent = stage;
+    if (Array.isArray(info.logs)) {
+      const log = el('acLogs');
+      log.textContent = info.logs.join('\n') || stage;
+      log.scrollTop = log.scrollHeight;
+    }
+    if (!terminal.has(info.status)) return;
+    if (info.status === 'done') {
+      for (const result of info.results || []) {
+        addDownload(`下载 ${result.level || result.tier} PEZ（${result.note_count} 音符）`, result.file, info.job_id);
+      }
+      addDownload('保存全部难度 ZIP', info.batch_file, info.job_id);
+      addDownload('导出踩音 points JSON', info.points_file, info.job_id);
+      if (job.snap) bridge.emit('get_preview');
+    }
+    job = null;
+    cancelling = false;
+    bridge.emit('get_state');
+    refresh();
+  }
+
+  function number(id) {
+    const field = el(id);
+    if (!Number.isFinite(field.valueAsNumber) || !field.validity.valid) {
+      field.closest('details')?.setAttribute('open', '');
+      field.reportValidity();
+      throw new Error('请检查数值选项。');
+    }
+    return field.valueAsNumber;
+  }
+
+  async function start(snap) {
+    let data;
+    try {
+      if (snap) data = {window_ms: number('acWindow'), strength: number('acStrength')};
+      else {
+        const options = {
+          difficulty: el('acDifficulty').value, all_tiers: el('acAllTiers').checked,
+          key_mode: el('acKey').value, density: number('acDensity'), line_fx: el('acLineFx').value,
+          pulse_style: el('acPulse').value, deco_when: el('acDeco').value, main_y: number('acMainY'),
+          mix_spec: el('acMix').value.trim(), main_swing: el('acSwing').checked, seed: number('acSeed')
+        };
+        if (el('acCustomWeights').checked) {
+          for (const [key, id] of Object.entries(weights)) options[key] = number(id);
+        }
+        data = points ? {options, points} : {options};
+      }
+    } catch (error) {
+      toast(error.message, 'warn');
+      return;
+    }
+    pending = true;
+    early = null;
+    el('acProgress').value = 0;
+    if (!snap) el('acResults').replaceChildren();
+    el('acLogs').textContent = el('acStatus').textContent = '正在提交任务…';
+    if (snap) el('acSnapState').textContent = el('acStatus').textContent;
+    refresh();
+    try {
+      const response = await request(snap ? 'autochart_snap' : 'autochart_start', data);
+      job = {id: response.job_id, snap};
+      if (early) progress(early);
+    } catch (error) {
+      el('acStatus').textContent = error.message;
+      if (snap) el('acSnapState').textContent = error.message;
+    } finally {
+      pending = false;
+      early = null;
+      refresh();
+    }
+  }
+
+  async function poll() {
+    if (!job || !bridge.connected || polling) return;
+    const id = job.id;
+    polling = true;
+    try {
+      progress(await request('autochart_status', {job_id: id}));
+    } catch (error) {
+      if (job?.id !== id || !bridge.connected) return;
+      el('acStatus').textContent = error.message;
+      if (job.snap) el('acSnapState').textContent = error.message;
+      if (error.message === '找不到该任务') {
+        job = null;
+        cancelling = false;
+        refresh();
+      }
+    } finally {
+      polling = false;
+    }
+  }
+
+  el('acStart').onclick = () => start(false);
+  el('acSnap').onclick = () => start(true);
+  el('acCancel').onclick = async () => {
+    if (!job || cancelling) return;
+    cancelling = true;
+    refresh();
+    try {
+      await request('autochart_cancel', {job_id: job.id});
+      if (job) el('acStatus').textContent = '正在取消任务…';
+    } catch (error) {
+      cancelling = false;
+      toast(error.message, 'warn');
+      refresh();
+    }
+  };
+  el('acUndo').onclick = async () => {
+    pending = true;
+    refresh();
+    try {
+      await request('autochart_undo', {});
+      el('acSnapState').textContent = '已撤销吸附。';
+      bridge.emit('get_state');
+      bridge.emit('get_preview');
+    } catch (error) {
+      el('acSnapState').textContent = error.message;
+    } finally {
+      pending = false;
+      refresh();
+    }
+  };
+  const pickPoints=document.createElement('button');
+  pickPoints.className='sec'; pickPoints.textContent='选择 points JSON…';
+  el('acPointsFile').hidden=true;
+  el('acPointsFile').after(pickPoints);
+  pickPoints.onclick=async ()=>{
+    reading=true; refresh();
+    try {
+      const result=await bridge.emit('pick_points');
+      if(result.ok && !result.cancelled){
+        points=result.data;
+        el('acPointsInfo').textContent=`已导入 ${result.filename}（${points.points.length} 个踩音点）`;
+      }
+    } finally { reading=false; refresh(); }
+  };
+  el('acClearPoints').onclick=()=>{
+    points=undefined;
+    el('acPointsInfo').textContent=pointsHint;
+    refresh();
+  };
+  el('acAllTiers').onchange = el('acCustomWeights').onchange = refresh;
+  bridge.on('state', value => { state = value; refresh(); });
+  bridge.on('autochart_progress', progress);
+  bridge.on('connect', () => { bridge.emit('get_state'); refresh(); poll(); });
+  bridge.on('disconnect', refresh);
+  setInterval(poll, 2500);
+})();
+bridge.on('connect', ()=>bridge.emit('get_state'));
 </script>
 </body>
 </html>

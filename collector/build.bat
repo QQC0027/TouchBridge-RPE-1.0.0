@@ -5,9 +5,7 @@ cd /d "%~dp0"
 
 rem 用法：build.bat [/self-contained] [/quiet]
 set "OUT=%~dp0dist"
-set "SELF=--no-self-contained"
-if /i "%~1"=="/self-contained" set "SELF="
-if /i "%~2"=="/self-contained" set "SELF="
+set "SELF=--self-contained true"
 if /i "%~1"=="/quiet" set "TB_QUIET=1"
 if /i "%~2"=="/quiet" set "TB_QUIET=1"
 
@@ -35,6 +33,7 @@ if not exist "%OUT%\TouchBridge.exe" (
 
 echo.
 echo 已生成：%OUT%\TouchBridge.exe
-echo 自检用法：TouchBridge.exe --osctest
+echo 该采集器由主程序自动拉起（管道模式），正常使用无需单独启动。
+echo 如需排查设备问题，可手动运行：TouchBridge.exe --diagnose
 if not defined TB_QUIET pause
 exit /b 0

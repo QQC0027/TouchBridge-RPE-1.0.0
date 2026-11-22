@@ -1,23 +1,5 @@
 {
-  "osc": {
-    "port": 9000,
-    "address": "*"
-  },
-  "control": {
-    "port": 9001
-  },
-  "mapping": {
-    "finger_arg": 0,
-    "gesture_arg": 1,
-    "x_arg": 2,
-    "gesture_map": {
-      "tap": "tap",
-      "hold": "hold",
-      "drag": "drag"
-    },
-    "x_is_region": false,
-    "region_count": 9
-  },
+  "autochart_enabled": true,
   "settings": {
     "bpm": 160,
     "offset_ms": 0,
