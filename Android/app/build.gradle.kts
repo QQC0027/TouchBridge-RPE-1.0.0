@@ -15,6 +15,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -46,6 +47,16 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = false
+        unitTests.all {
+            if (providers.gradleProperty("audioStress").orNull == "true") {
+                it.maxHeapSize = "256m"
+                it.maxParallelForks = 1
+                it.systemProperty("audioStress", "true")
+                it.testLogging.showStandardStreams = true
+            } else {
+                it.exclude("**/LongAudioMemoryTest.class")
+            }
+        }
     }
 }
 
@@ -64,7 +75,12 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

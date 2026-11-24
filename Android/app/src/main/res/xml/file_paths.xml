@@ -3,4 +3,5 @@
     <cache-path name="shared" path="." />
     <files-path name="files" path="." />
     <external-files-path name="external" path="." />
+    <external-path name="public_downloads" path="Download/TouchBridge/" />
 </paths>

@@ -1,10 +1,18 @@
 package com.touchbridge.rpe.ui.pages
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,19 +28,24 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FiberManualRecord
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,20 +53,31 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.touchbridge.rpe.capture.BackgroundCaptureService
+import com.touchbridge.rpe.capture.CaptureSupport
+import com.touchbridge.rpe.capture.global.RootInputBackend
+import com.touchbridge.rpe.capture.global.ShizukuSetup
 import com.touchbridge.rpe.domain.model.Gesture
 import com.touchbridge.rpe.touch.TouchPadView
 import com.touchbridge.rpe.ui.AppViewModel
 import com.touchbridge.rpe.ui.components.Dot
 import com.touchbridge.rpe.ui.theme.AppColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun RecordPage(
@@ -64,6 +88,96 @@ fun RecordPage(
     val view = LocalView.current
     val context = LocalContext.current
     var showSummary by remember { mutableStateOf(false) }
+    var showSnap by remember { mutableStateOf(false) }
+    var snapWindow by remember { mutableStateOf(120f) }
+    var snapStrength by remember { mutableStateOf(1f) }
+    if (showSnap) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showSnap = false },
+            title = { Text("吸附录制手势") },
+            text = {
+                Column {
+                    Text("会根据音频检测结果调整 BPM 和偏移，可撤销。")
+                    Text("搜索窗口：${snapWindow.toInt()} ms")
+                    androidx.compose.material3.Slider(value = snapWindow, onValueChange = { snapWindow = it }, valueRange = 20f..250f)
+                    Text("吸附强度：${(snapStrength * 100).toInt()}%")
+                    androidx.compose.material3.Slider(value = snapStrength, onValueChange = { snapStrength = it })
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    showSnap = false
+                    vm.snapRecording(snapWindow.toDouble(), snapStrength.toDouble())
+                }) { Text("开始吸附") }
+            },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { showSnap = false }) { Text("取消") } },
+        )
+    }
+
+    var showBackground by remember { mutableStateOf(false) }
+    var permissionTick by remember { mutableStateOf(0) }
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted) {
+            vm.showToast("未授予通知权限，后台采集将缺少常驻状态提示", "warn")
+        }
+        startBackgroundCapture(context)
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permissionTick += 1
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (showBackground) {
+        BackgroundCaptureDialog(
+            context = context,
+            refreshKey = permissionTick,
+            onDismiss = { showBackground = false },
+            onConfirm = {
+                showBackground = false
+                val needsRuntimePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) != PackageManager.PERMISSION_GRANTED
+                if (needsRuntimePermission) {
+                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    if (!CaptureSupport.canPostNotifications(context)) {
+                        vm.showToast("通知已关闭或通道被禁用，后台采集将缺少常驻状态提示", "warn")
+                    }
+                    startBackgroundCapture(context)
+                }
+            },
+        )
+    }
+
+    vm.recoveryPrompt?.let { prompt ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("发现未完成的录制") },
+            text = {
+                Column {
+                    Text("会话 ${prompt.sessionId}", fontSize = 12.sp, color = AppColors.TextMuted)
+                    Text("已恢复 ${prompt.noteCount} 个手势，时长约 ${prompt.durationSec.toInt()} 秒")
+                    if (prompt.damaged) {
+                        Text(
+                            "日志尾部不完整，已保留成功写入的部分。",
+                            color = AppColors.Yellow,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = vm::recoverPendingSession) { Text("恢复") } },
+            dismissButton = { TextButton(onClick = vm::discardPendingSession) { Text("丢弃") } },
+        )
+    }
 
     DisposableEffect(Unit) {
         val activity = context.findActivity()
@@ -168,7 +282,11 @@ fun RecordPage(
                     ) {
                         Dot(if (vm.recording) AppColors.Red else AppColors.TextMuted, 9)
                         Text(
-                            if (vm.recording) "REC" else "STANDBY",
+                            when {
+                                vm.backgroundRecording -> "BG REC"
+                                vm.recording -> "REC"
+                                else -> "STANDBY"
+                            },
                             color = if (vm.recording) AppColors.Red else AppColors.TextSecondary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp,
@@ -195,9 +313,50 @@ fun RecordPage(
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                val backgroundSupported = CaptureSupport.isPlatformSupported()
+                Surface(
+                    color = Color(0xCC0B1424),
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (backgroundSupported) AppColors.Primary.copy(alpha = 0.35f) else Color(0x332B3E5E),
+                    ),
+                    modifier = Modifier.clickable {
+                        when {
+                            vm.recording -> vm.showToast("当前正在录制，请先停止", "warn")
+                            !backgroundSupported -> vm.showToast("当前系统版本不支持后台采集", "warn")
+                            else -> showBackground = true
+                        }
+                    },
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(
+                            Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = if (backgroundSupported) AppColors.PrimaryBright else AppColors.TextMuted,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Text(
+                            "后台采集",
+                            color = if (backgroundSupported) AppColors.PrimaryBright else AppColors.TextMuted,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
                 IconButton(onClick = {
-                    if (vm.recording) vm.stopRecording()
-                    onExit()
+                    if (vm.backgroundRecording) {
+                        // 服务结束后会自动打开预览页，不能再 pop，否则会抢在跳转前退出。
+                        vm.stopRecording()
+                    } else {
+                        if (vm.recording) vm.stopRecording()
+                        onExit()
+                    }
                 }) {
                     Icon(Icons.Rounded.Close, contentDescription = "退出录制", tint = AppColors.TextSecondary)
                 }
@@ -234,6 +393,23 @@ fun RecordPage(
                         fontSize = 12.sp,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     )
+                }
+            }
+
+            vm.backgroundMessage?.let { message ->
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    color = if (vm.backgroundRecording) Color(0xCC3A1420) else Color(0xCC0B1424),
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Dot(if (vm.backgroundRecording) AppColors.Red else AppColors.Yellow, 7)
+                        Spacer(Modifier.width(6.dp))
+                        Text(message, color = AppColors.TextSecondary, fontSize = 12.sp)
+                    }
                 }
             }
         }
@@ -282,6 +458,14 @@ fun RecordPage(
                 fontSize = 12.sp,
             )
 
+            if (!vm.recording && vm.noteCount > 0 && vm.audioInfo != null && com.touchbridge.rpe.domain.autochart.AutoChartFeature.ENABLED) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.TextButton(onClick = { showSnap = true }, enabled = !vm.snapInProgress) {
+                        Text(if (vm.snapInProgress) "分析音频中…" else "吸附对齐")
+                    }
+                    if (vm.canUndoSnap) androidx.compose.material3.TextButton(onClick = vm::undoSnap) { Text("撤销吸附") }
+                }
+            }
             if (showSummary) {
                 Spacer(Modifier.height(14.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -359,6 +543,137 @@ private fun bigCircle(
                 .background(color, RoundedCornerShape(50)),
         ) {
             Icon(icon, contentDescription = null, tint = Color(0xFF04121F), modifier = Modifier.size(30.dp))
+        }
+    }
+}
+
+@Composable
+private fun BackgroundCaptureDialog(
+    context: Context,
+    refreshKey: Int,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val accessibilitySupported = CaptureSupport.isAccessibilityCaptureSupported()
+    val accessibility = remember(refreshKey) { CaptureSupport.isAccessibilityEnabled(context) }
+    val overlay = remember(refreshKey) { CaptureSupport.canDrawOverlays(context) }
+    val notification = remember(refreshKey) { CaptureSupport.canPostNotifications(context) }
+    val shizukuGranted by ShizukuSetup.permission.collectAsState()
+    var rootReady by remember(refreshKey) { mutableStateOf(RootInputBackend.cachedAvailable == true) }
+    var probingRoot by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val privilegedReady = shizukuGranted || rootReady
+    val canStart = remember(refreshKey, shizukuGranted, rootReady, accessibility, overlay) {
+        CaptureSupport.canStartBackgroundCapture(context) ||
+            (overlay && !accessibilitySupported && privilegedReady)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("后台采集") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "进入后应用会退到桌面，右上角保留小型悬浮控制条：开始录制 / 返回；录制中只保留结束录制。触摸会透传给当前 App 并由系统级通道采集。",
+                    fontSize = 12.sp,
+                    color = AppColors.TextSecondary,
+                )
+                if (accessibilitySupported) {
+                    PermissionRow("无障碍服务（Android 13+ 采集）", accessibility) {
+                        CaptureSupport.openAccessibilitySettings(context)
+                    }
+                } else {
+                    Text(
+                        "Android 8–12 没有公开的全局触摸 API，必须通过 Shizuku 或 Root 读取触摸设备。",
+                        fontSize = 12.sp,
+                        color = AppColors.TextSecondary,
+                    )
+                    PermissionRow("Shizuku 授权", shizukuGranted) {
+                        if (!ShizukuSetup.requestPermission()) {
+                            if (ShizukuSetup.openManager(context)) {
+                                Toast.makeText(context, "请在 Shizuku 中启动服务后再回来授权", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "未检测到 Shizuku，请先安装并启动 Shizuku", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                    PermissionRow("Root（su 兜底）", rootReady) {
+                        if (probingRoot) return@PermissionRow
+                        probingRoot = true
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) { RootInputBackend.probe() }
+                            rootReady = ok
+                            probingRoot = false
+                            Toast.makeText(
+                                context,
+                                if (ok) "Root 可读取触摸设备" else "Root 探测失败：未授权或无法读取 /dev/input",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                }
+                PermissionRow("悬浮窗（控制条显示）", overlay) {
+                    CaptureSupport.openOverlaySettings(context)
+                }
+                PermissionRow("通知（前台服务状态）", notification) {
+                    CaptureSupport.openNotificationSettings(context)
+                }
+                Text(
+                    if (accessibilitySupported && Build.VERSION.SDK_INT == Build.VERSION_CODES.TIRAMISU) {
+                        "Android 13 的无障碍采集需要触摸探索模式，单指操作可能被识别为探索手势；Android 14+ 不再需要。"
+                    } else if (accessibilitySupported) {
+                        "Android 14+ 使用无障碍原始触摸事件，不需要触摸探索模式。"
+                    } else {
+                        "Shizuku 以 shell 身份运行时，部分系统会拒绝读取 /dev/input；此时请改用 Root。"
+                    },
+                    fontSize = 11.sp,
+                    color = AppColors.TextMuted,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = canStart) {
+                Text(if (canStart) "进入后台采集" else "请先完成采集通道配置")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun PermissionRow(label: String, granted: Boolean, onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Dot(if (granted) AppColors.Green else AppColors.Yellow, 8)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            label,
+            fontSize = 13.sp,
+            color = AppColors.TextPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        if (granted) {
+            Text("已开启", fontSize = 12.sp, color = AppColors.Green)
+        } else {
+            TextButton(onClick = onOpen) { Text("去开启") }
+        }
+    }
+}
+
+private fun startBackgroundCapture(context: Context) {
+    if (!BackgroundCaptureService.start(context)) return
+    val activity = context.findActivity()
+    if (activity != null) {
+        activity.moveTaskToBack(true)
+    } else {
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
         }
     }
 }

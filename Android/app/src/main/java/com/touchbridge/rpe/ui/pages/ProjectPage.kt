@@ -70,6 +70,7 @@ fun ProjectPage(
     vm: AppViewModel,
     onRecord: () -> Unit,
     onPreview: () -> Unit,
+    onAutoChart: () -> Unit,
 ) {
     val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::pickAudio)
@@ -302,6 +303,14 @@ fun ProjectPage(
                         Icon(Icons.Rounded.MusicNote, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("开始录制", fontWeight = FontWeight.Bold, color = Color(0xFF04121F))
+                    }
+                    OutlinedButton(
+                        onClick = onAutoChart,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    ) {
+                        Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("自动制谱")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(

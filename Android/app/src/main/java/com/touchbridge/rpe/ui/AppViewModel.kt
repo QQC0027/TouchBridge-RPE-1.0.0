@@ -11,11 +11,21 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.touchbridge.rpe.audio.AudioEngine
+import com.touchbridge.rpe.capture.BackgroundCaptureService
+import com.touchbridge.rpe.capture.CaptureHandoffStore
+import com.touchbridge.rpe.capture.DisplayInfo
+import com.touchbridge.rpe.capture.PendingCaptureResult
+import com.touchbridge.rpe.capture.RecorderPhase
+import com.touchbridge.rpe.capture.RecordingCoordinator
+import com.touchbridge.rpe.capture.RecordingMode
+import com.touchbridge.rpe.capture.RecordingRecovery
+import com.touchbridge.rpe.capture.StopReason
 import com.touchbridge.rpe.data.ProjectRepository
 import com.touchbridge.rpe.data.SettingsRepository
+import com.touchbridge.rpe.domain.autochart.AudioAnalyzer
+import com.touchbridge.rpe.domain.autochart.SnapAligner
 import com.touchbridge.rpe.domain.engine.BeatClock
 import com.touchbridge.rpe.domain.engine.Calibrator
-import com.touchbridge.rpe.domain.engine.RecordingSession
 import com.touchbridge.rpe.domain.engine.RpeBuilder
 import com.touchbridge.rpe.domain.engine.RpeBuildResult
 import com.touchbridge.rpe.domain.engine.SimulatedSession
@@ -50,13 +60,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var coverInfo by mutableStateOf(projectRepo.existingCover())
         private set
 
-    private val session = RecordingSession { settings }
+    private val coordinator = RecordingCoordinator
 
     var recording by mutableStateOf(false)
         private set
     var noteCount by mutableStateOf(0)
         private set
     var fingerCount by mutableStateOf(0)
+        private set
+    var backgroundRecording by mutableStateOf(false)
+        private set
+    var backgroundMessage by mutableStateOf<String?>(null)
+        private set
+    var recoveryPrompt by mutableStateOf<RecoveryPrompt?>(null)
         private set
     var gestureHint by mutableStateOf("待机")
         private set
@@ -87,13 +103,81 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val warning: String? = null,
     )
 
+    data class RecoveryPrompt(
+        val sessionId: String,
+        val noteCount: Int,
+        val durationSec: Double,
+        val damaged: Boolean,
+    )
+
     private var lastHudNanos = 0L
-    private var virtualStartUptimeMs = 0L
     private var lastGesture: String = "待机"
     private val mainHandler = Handler(Looper.getMainLooper())
     private val saveSettingsRunnable = Runnable { settingsRepo.saveSettings(settings) }
 
+    private var pendingRecovery: RecordingRecovery.RecoveredSession? = null
+
     init {
+        coordinator.init(getApplication())
+        coordinator.updateSettings(settings)
+        var wasRecording = false
+        viewModelScope.launch {
+            coordinator.state.collect { state ->
+                val endedElsewhere = wasRecording && !state.recording
+                wasRecording = state.recording
+                recording = state.recording
+                noteCount = state.noteCount
+                fingerCount = state.fingerCount
+                backgroundRecording = state.mode == RecordingMode.BACKGROUND && state.recording
+                backgroundMessage = state.message
+                if (state.phase == RecorderPhase.DEGRADED) gestureHint = "采集中断"
+                if (endedElsewhere) {
+                    // 后台结束不经过 stopRecording 回调；必须无条件重建，否则会停留在旧预览。
+                    gestureHint = "已结束"
+                    rebuildPreview()
+                }
+            }
+        }
+        viewModelScope.launch {
+            val handoff = PendingCaptureResult.take()
+            if (handoff != null) {
+                CaptureHandoffStore.takePending(getApplication())
+                coordinator.replaceNotes(handoff.notes)
+                noteCount = handoff.notes.size
+                gestureHint = "已结束"
+                rebuildPreview(handoff.notes)
+                showToast("后台录制已保存，共 ${handoff.notes.size} 个手势", "success")
+                return@launch
+            }
+            // 进程在服务结束与 Activity 启动之间被杀：从已完成 journal 重建。
+            val sessionId = CaptureHandoffStore.takePending(getApplication()) ?: return@launch
+            val root = File(getApplication<Application>().filesDir, "recording")
+            val recovered = withContext(Dispatchers.IO) {
+                RecordingRecovery.load(File(root, sessionId))
+            }
+            if (recovered != null && recovered.ended && recovered.notes.isNotEmpty()) {
+                coordinator.replaceNotes(recovered.notes)
+                noteCount = recovered.notes.size
+                gestureHint = "已结束"
+                rebuildPreview(recovered.notes)
+                showToast("已恢复录制结果，共 ${recovered.notes.size} 个手势", "success")
+            }
+        }
+        viewModelScope.launch {
+            // 后台服务正在写入的会话不是“崩溃残留”，不能提示恢复并覆盖当前录制。
+            if (coordinator.state.value.recording) return@launch
+            val root = File(getApplication<Application>().filesDir, "recording")
+            val pending = withContext(Dispatchers.IO) { RecordingRecovery.pending(root).firstOrNull() }
+            if (pending != null) {
+                pendingRecovery = pending
+                recoveryPrompt = RecoveryPrompt(
+                    sessionId = pending.sessionId,
+                    noteCount = pending.noteCount,
+                    durationSec = pending.durationSec,
+                    damaged = pending.damagedTail,
+                )
+            }
+        }
         audioInfo?.let { info ->
             runCatching {
                 audio.load(info.file)
@@ -102,10 +186,48 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------------------------------------------------------------- 恢复
+
+    fun recoverPendingSession() {
+        val pending = pendingRecovery ?: return
+        pendingRecovery = null
+        recoveryPrompt = null
+        coordinator.replaceNotes(pending.notes)
+        noteCount = pending.notes.size
+        rebuildPreview(pending.notes)
+        showToast("已恢复 ${pending.notes.size} 个手势", "success")
+    }
+
+    /** 服务已结束但进程内交接丢失时，尝试用最近一次已完成会话重建预览。 */
+    fun recoverLatestCompletedForPreview() {
+        if (previewNotes.isNotEmpty()) return
+        viewModelScope.launch {
+            val root = File(getApplication<Application>().filesDir, "recording")
+            val recovered = withContext(Dispatchers.IO) { RecordingRecovery.latestCompleted(root) }
+                ?: return@launch
+            if (previewNotes.isNotEmpty()) return@launch
+            coordinator.replaceNotes(recovered.notes)
+            noteCount = recovered.notes.size
+            gestureHint = "已结束"
+            rebuildPreview(recovered.notes)
+        }
+    }
+
+    fun discardPendingSession() {
+        val pending = pendingRecovery ?: return
+        pendingRecovery = null
+        recoveryPrompt = null
+        val root = File(getApplication<Application>().filesDir, "recording")
+        viewModelScope.launch(Dispatchers.IO) {
+            RecordingRecovery.delete(root, pending.sessionId)
+        }
+    }
+
     // ---------------------------------------------------------------- 设置
 
     fun updateSettings(transform: (ChartSettings) -> ChartSettings) {
         settings = transform(settings)
+        coordinator.updateSettings(settings)
         mainHandler.removeCallbacks(saveSettingsRunnable)
         mainHandler.postDelayed(saveSettingsRunnable, 500L)
     }
@@ -135,6 +257,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 showToast("音频导入失败", "error")
                 return@launch
             }
+            snapSnapshot = null
             audioInfo = picked
             runCatching {
                 audio.load(picked.file)
@@ -193,58 +316,77 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshTick() {
         musicTime = if (audioReady) audio.currentMusicTimeSec() else musicTime
         audioPlaying = audio.isPlaying
-        if (recording) {
-            noteCount = session.notes.size
-        }
+        if (recording) noteCount = coordinator.state.value.noteCount
     }
 
     // ---------------------------------------------------------------- 录制
 
     fun startRecording() {
         if (recording) return
+        val state = coordinator.state.value
+        if (state.phase == RecorderPhase.ARMED) {
+            showToast("后台采集已就绪，请返回桌面使用悬浮条开始录制", "warn")
+            return
+        }
+        snapSnapshot = null
         lastGesture = "待机"
         gestureHint = "待机"
         noteCount = 0
         fingerCount = 0
         previewNotes = emptyList()
         stats = null
-        virtualStartUptimeMs = SystemClock.uptimeMillis()
+        coordinator.updateSettings(settings)
         if (audioReady) {
             audio.seekTo(0.0)
             audio.play()
             audioPlaying = true
             musicTime = 0.0
         }
-        session.start(0.0)
+        coordinator.startForeground(displayInfo(), audioBacked = audioReady) { started ->
+            if (!started) {
+                mainHandler.post {
+                    recording = false
+                    showToast("无法开始录制，请检查存储空间", "warn")
+                }
+            }
+        }
         recording = true
     }
 
     fun stopRecording() {
         if (!recording) return
-        val end = if (audioReady) audio.currentMusicTimeSec() else elapsedVirtual()
-        session.stop(end)
+        val state = coordinator.state.value
+        if (state.mode == RecordingMode.BACKGROUND) {
+            // 后台会话由前台服务持有；直接 stop 会留下通知/悬浮条并丢失预览交接。
+            BackgroundCaptureService.stopSession(getApplication())
+            return
+        }
         if (audioReady) {
             audio.pause()
             audioPlaying = false
         }
-        recording = false
-        noteCount = session.notes.size
-        fingerCount = 0
-        gestureHint = "已结束"
-        rebuildPreview()
-        showToast("录制结束，共 ${session.notes.size} 个手势", "success")
+        coordinator.stop(StopReason.USER) { result ->
+            mainHandler.post {
+                recording = false
+                noteCount = result.notes.size
+                fingerCount = 0
+                gestureHint = "已结束"
+                rebuildPreview(result.notes)
+                showToast("录制结束，共 ${result.notes.size} 个手势", "success")
+            }
+        }
     }
 
     fun onTouchFrame(samples: List<TouchSample>, uptimeNanos: Long) {
         if (!recording) return
-        val music = if (audioReady) audio.musicTimeSec(uptimeNanos) else elapsedVirtual()
-        session.onTouchFrame(samples, music)
+        val audioTime = if (audioReady) audio.musicTimeSec(uptimeNanos) else null
+        coordinator.submitViewFrame(samples, uptimeNanos, audioTime)
         val now = SystemClock.uptimeMillis()
         if (now - lastHudNanos >= 33) {
             lastHudNanos = now
             fingerCount = samples.size
-            noteCount = session.notes.size
-            val last = session.notes.lastOrNull()
+            noteCount = coordinator.state.value.noteCount
+            val last = coordinator.lastNote()
             if (last != null) {
                 lastGesture = when (last.gesture) {
                     com.touchbridge.rpe.domain.model.Gesture.TAP -> "Tap"
@@ -252,19 +394,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     com.touchbridge.rpe.domain.model.Gesture.FLICK -> "Flick"
                     com.touchbridge.rpe.domain.model.Gesture.DRAG -> "Drag"
                 }
+                gestureHint = lastGesture
             }
-            gestureHint = lastGesture
         }
     }
 
-    private fun elapsedVirtual(): Double =
-        (SystemClock.uptimeMillis() - virtualStartUptimeMs) / 1000.0
+    private fun displayInfo(): DisplayInfo {
+        val metrics = getApplication<Application>().resources.displayMetrics
+        return DisplayInfo(metrics.widthPixels, metrics.heightPixels, metrics.densityDpi, 0)
+    }
 
     // ---------------------------------------------------------------- 预览
 
-    fun rebuildPreview() {
+    fun rebuildPreview(notes: List<GestureNote> = coordinator.notesSnapshot()) {
         runCatching {
-            val result = RpeBuilder.build(session.notes, clockFor(), settings, meta)
+            val result = RpeBuilder.build(notes, clockFor(), settings, meta)
             previewNotes = result.notes
             stats = result.stats
         }.onFailure {
@@ -279,18 +423,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             offsetMs = settings.offsetMs,
             seed = 42L,
         )
-        session.loadSimulated(sim.notes)
+        coordinator.replaceNotes(sim.notes)
         noteCount = sim.notes.size
         rebuildPreview()
         showToast("已注入模拟手势 ${sim.notes.size} 个", "info")
     }
 
     fun autoCalibrate() {
-        if (session.notes.isEmpty()) {
+        val notes = coordinator.notesSnapshot()
+        if (notes.isEmpty()) {
             showToast("请先录制或注入手势", "warn")
             return
         }
-        val offset = Calibrator.estimate(session.notes, clockFor())
+        val offset = Calibrator.estimate(notes, clockFor())
         if (offset == null) {
             showToast("校准失败", "error")
             return
@@ -300,15 +445,71 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         showToast("自动校准完成：采样补偿 ${offset} ms", "success")
     }
 
+    private data class SnapSnapshot(val notes: List<GestureNote>, val settings: ChartSettings)
+
+    private var snapSnapshot by mutableStateOf<SnapSnapshot?>(null)
+    var snapInProgress by mutableStateOf(false)
+        private set
+    val canUndoSnap: Boolean get() = snapSnapshot != null && !snapInProgress && !recording
+
+    fun snapRecording(windowMs: Double, strength: Double) {
+        if (recording || snapInProgress) return
+        val file = audioInfo?.file
+        val notes = coordinator.notesSnapshot()
+        val previous = settings
+        if (file == null || notes.isEmpty()) {
+            showToast("请先导入音频并完成录制", "warn")
+            return
+        }
+        if (strength == 0.0 || windowMs == 0.0) {
+            showToast("已吸附 0 个手势")
+            return
+        }
+        snapInProgress = true
+        viewModelScope.launch {
+            try {
+                val analysis = AudioAnalyzer.analyze(file)
+                require(analysis.points.isNotEmpty()) { "没有检测到可供吸附的音符起点" }
+                val result = withContext(Dispatchers.Default) { SnapAligner.align(notes, analysis, windowMs, strength) }
+                if (recording || coordinator.notesSnapshot() != notes || settings != previous || audioInfo?.file != file) {
+                    showToast("录制或节拍参数已变化，请重新吸附", "warn")
+                    return@launch
+                }
+                if (snapSnapshot == null) snapSnapshot = SnapSnapshot(notes, previous)
+                coordinator.replaceNotes(result.notes)
+                updateSettings { it.copy(bpm = analysis.bpm, offsetMs = analysis.offsetSec * 1000, segments = emptyList()) }
+                rebuildPreview()
+                showToast("已吸附 ${result.moved} 个手势", "success")
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                showToast(error.message ?: "吸附失败", "error")
+            } finally {
+                snapInProgress = false
+            }
+        }
+    }
+
+    fun undoSnap() {
+        if (!canUndoSnap) return
+        val snapshot = snapSnapshot ?: return
+        coordinator.replaceNotes(snapshot.notes)
+        updateSettings { it.copy(bpm = snapshot.settings.bpm, offsetMs = snapshot.settings.offsetMs, segments = snapshot.settings.segments) }
+        snapSnapshot = null
+        rebuildPreview()
+        showToast("已撤销吸附", "success")
+    }
+
     fun clearNotes() {
-        session.loadSimulated(emptyList())
+        snapSnapshot = null
+        coordinator.clearNotes()
         noteCount = 0
         previewNotes = emptyList()
         stats = null
         showToast("已清空音符", "info")
     }
 
-    fun gestureNotes(): List<GestureNote> = session.notes.toList()
+    fun gestureNotes(): List<GestureNote> = coordinator.notesSnapshot()
 
     // ---------------------------------------------------------------- 导出
 
@@ -320,7 +521,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // 在进入 IO 线程前抓取快照，避免后台线程读取 Compose 状态
                 val settingsSnapshot = settings
                 val metaSnapshot = meta
-                val gestures = session.notes.toList()
+                val gestures = coordinator.notesSnapshot()
                 val audioSnapshot = audioInfo
                 val coverSnapshot = coverInfo
                 val outcome = withContext(Dispatchers.IO) {
@@ -394,6 +595,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         super.onCleared()
         mainHandler.removeCallbacks(saveSettingsRunnable)
         settingsRepo.saveSettings(settings)
+        val state = RecordingCoordinator.state.value
+        // 后台录制的生命周期归前台服务所有；仅清理应用内录制，避免划掉任务时误停后台会话。
+        if (state.recording && state.mode != RecordingMode.BACKGROUND) {
+            coordinator.stop(StopReason.APP_EXIT)
+        }
         audio.release()
     }
 

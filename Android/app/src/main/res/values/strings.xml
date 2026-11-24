@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">TouchBridge RPE</string>
+    <string name="accessibility_service_label">TouchBridge 后台采集</string>
+    <string name="accessibility_service_description">在后台录制期间读取全屏触摸位置，用于生成节奏谱面；停止录制后会自动撤销请求。</string>
 </resources>

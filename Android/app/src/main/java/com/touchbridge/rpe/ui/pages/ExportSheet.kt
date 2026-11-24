@@ -1,5 +1,10 @@
 package com.touchbridge.rpe.ui.pages
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,11 +29,17 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.touchbridge.rpe.ui.AppViewModel
 import com.touchbridge.rpe.ui.components.StatChip
 import com.touchbridge.rpe.ui.theme.AppColors
@@ -37,6 +48,27 @@ import com.touchbridge.rpe.ui.theme.AppColors
 @Composable
 fun ExportSheet(vm: AppViewModel, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
+    var pendingShare by remember { mutableStateOf(false) }
+    val storagePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted) vm.showToast("未授予存储权限，谱面将保存到应用目录", "warn")
+        vm.exportPez(share = pendingShare)
+    }
+    val startExport: (Boolean) -> Unit = { share ->
+        val needsLegacyPermission = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) != PackageManager.PERMISSION_GRANTED
+        if (needsLegacyPermission) {
+            pendingShare = share
+            storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            vm.exportPez(share = share)
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -121,7 +153,7 @@ fun ExportSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             }
 
             Button(
-                onClick = { vm.exportPez(share = false) },
+                onClick = { startExport(false) },
                 enabled = !vm.exporting,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -138,7 +170,7 @@ fun ExportSheet(vm: AppViewModel, onDismiss: () -> Unit) {
             }
 
             OutlinedButton(
-                onClick = { vm.exportPez(share = true) },
+                onClick = { startExport(true) },
                 enabled = !vm.exporting,
                 modifier = Modifier
                     .fillMaxWidth()

@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Gesture
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.BackHandler
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -36,6 +38,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.touchbridge.rpe.ui.pages.AutoChartPage
 import com.touchbridge.rpe.ui.pages.PreviewPage
 import com.touchbridge.rpe.ui.pages.ProjectPage
 import com.touchbridge.rpe.ui.pages.RecordPage
@@ -44,9 +47,10 @@ import com.touchbridge.rpe.ui.theme.AppColors
 
 private data class NavItem(val route: String, val label: String, val icon: ImageVector)
 
-private val navItems = listOf(
+private val navItems = listOfNotNull(
     NavItem("project", "工程", Icons.Rounded.Home),
     NavItem("record", "录制", Icons.Rounded.Gesture),
+    NavItem("autochart", "制谱", Icons.Rounded.AutoAwesome).takeIf { com.touchbridge.rpe.domain.autochart.AutoChartFeature.ENABLED },
     NavItem("settings", "参数", Icons.Rounded.Tune),
     NavItem("preview", "预览", Icons.Rounded.PlayCircle),
 )
@@ -61,17 +65,39 @@ private fun NavHostController.go(route: String, current: String) {
 }
 
 @Composable
-fun AppNavHost(vm: AppViewModel = viewModel()) {
+fun AppNavHost(
+    vm: AppViewModel = viewModel(),
+    externalDestination: String? = null,
+    captureError: String? = null,
+    onExternalConsumed: () -> Unit = {},
+) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route ?: "project"
-    val immersive = route == "record"
+    val immersive = route == "record" || route == "autochart"
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(vm.toast?.id) {
         val t = vm.toast ?: return@LaunchedEffect
         snackbar.showSnackbar(t.text)
         vm.clearToast(t.id)
+    }
+
+    BackHandler(enabled = vm.recording) {
+        vm.showToast("请先结束录制，再退出应用", "warn")
+    }
+
+    LaunchedEffect(externalDestination, captureError) {
+        if (externalDestination != null) {
+            if (externalDestination == "preview") vm.recoverLatestCompletedForPreview()
+            nav.go(externalDestination, route)
+        }
+        if (!captureError.isNullOrBlank()) {
+            vm.showToast(captureError, "warn")
+        }
+        if (externalDestination != null || !captureError.isNullOrBlank()) {
+            onExternalConsumed()
+        }
     }
 
     BoxWithConstraints {
@@ -132,7 +158,11 @@ fun AppNavHost(vm: AppViewModel = viewModel()) {
                             vm = vm,
                             onRecord = { nav.navigate("record") },
                             onPreview = { nav.navigate("preview") },
+                            onAutoChart = { nav.navigate("autochart") },
                         )
+                    }
+                    composable("autochart") {
+                        AutoChartPage(appVm = vm, onBack = { nav.popBackStack() })
                     }
                     composable("record") {
                         RecordPage(
